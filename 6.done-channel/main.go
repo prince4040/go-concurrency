@@ -5,7 +5,7 @@ import (
 )
 
 /*
-	to prevent go routines to run infinitely (unintentionally)
+	to prevent go routines from running infinitely (unintentionally)
 */
 
 func fibonacci(c chan int, done <-chan bool) {
