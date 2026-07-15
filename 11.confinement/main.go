@@ -3,30 +3,31 @@ package main
 import (
 	"fmt"
 	"sync"
+	"time"
 )
 
-var lock sync.Mutex
-
-func processNum(wg *sync.WaitGroup, num int, dest *[]int) {
+func processNum(wg *sync.WaitGroup, num int, dest *int) {
 	defer wg.Done()
 	processedNum := num * 2
 
-	lock.Lock()
-	*dest = append(*dest, processedNum)
-	lock.Unlock()
+	*dest = processedNum
 }
 
 func main() {
+	start := time.Now()
+
 	nums := []int{1, 2, 3, 4, 5}
-	result := []int{}
+	result := make([]int, len(nums))
 
 	var wg sync.WaitGroup
 
-	for _, num := range nums {
+	for i, num := range nums {
 		wg.Add(1)
-		go processNum(&wg, num, &result)
+		go processNum(&wg, num, &result[i])
 	}
 
 	wg.Wait()
 	fmt.Println(result)
+
+	fmt.Println(time.Since(start))
 }
