@@ -73,14 +73,15 @@ func primeFinder(done <-chan bool, intStream <-chan int) <-chan int {
 	return primes
 }
 
+func getRandomNum() int {
+	return rand.IntN(5000000000)
+}
+
 func main() {
 	start := time.Now()
+
 	done := make(chan bool)
 	defer close(done)
-
-	getRandomNum := func() int {
-		return rand.IntN(5000000000)
-	}
 
 	randNumStream := repeatFun(done, getRandomNum)
 	primeStream := primeFinder(done, randNumStream)
