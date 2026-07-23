@@ -2,49 +2,50 @@ package main
 
 import (
 	"fmt"
-	"sync"
 )
 
-func producer(done <-chan any, c chan<- string) {
-	for {
-		select {
-		case <-done:
-			return
-		case c <- "data":
-		}
-	}
-}
+/*
+orDone adapts a channel so a consumer can range over it while still responding
+to cancellation. Its forwarding goroutine observes done while waiting for
+input and again while waiting for the downstream consumer.
 
-func receiver(wg *sync.WaitGroup, done <-chan any, c <-chan string) {
-	defer wg.Done()
+Both checks matter. Omitting either can strand the forwarding goroutine when an
+upstream producer is idle or a downstream consumer stops receiving.
+*/
 
-	for val := range orDone(done, c) {
-		// complex operation
-		fmt.Println(val)
-	}
+func producer(done <-chan struct{}) <-chan string {
+	out := make(chan string)
 
-	/*
-		NAIVE
+	go func() {
+		defer close(out)
+
 		for {
 			select {
 			case <-done:
 				return
-			case val, ok := <-c:
-				if !ok {
-					return
-				}
-				// complex operation
-				fmt.Println(val)
-
+			case out <- "data":
 			}
 		}
-	*/
+	}()
+
+	return out
 }
 
-func orDone[T any](done <-chan any, c <-chan T) <-chan T {
+func orDone[T any](done <-chan struct{}, c <-chan T) <-chan T {
+	out, _ := orDoneWithCompletion(done, c)
+	return out
+}
+
+// orDoneWithCompletion makes forwarding-goroutine termination observable.
+func orDoneWithCompletion[T any](
+	done <-chan struct{},
+	c <-chan T,
+) (<-chan T, <-chan struct{}) {
 	out := make(chan T)
+	completed := make(chan struct{})
 
 	go func() {
+		defer close(completed)
 		defer close(out)
 
 		for {
@@ -64,20 +65,21 @@ func orDone[T any](done <-chan any, c <-chan T) <-chan T {
 		}
 	}()
 
-	return out
+	return out, completed
 }
 
 func main() {
-	done := make(chan any)
-	defer close(done)
-	c := make(chan string)
+	done := make(chan struct{})
+	stream := producer(done)
+	values, forwarderCompleted := orDoneWithCompletion(done, stream)
 
-	wg := sync.WaitGroup{}
+	for range 5 {
+		fmt.Println(<-values)
+	}
 
-	go producer(done, c)
+	close(done)
 
-	wg.Add(1)
-	go receiver(&wg, done, c)
-
-	wg.Wait()
+	<-forwarderCompleted
+	for range stream {
+	}
 }

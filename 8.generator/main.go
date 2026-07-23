@@ -5,8 +5,16 @@ import (
 	"math/rand/v2"
 )
 
-// Generator
-func repeatFun[T any, K any](done <-chan K, fn func() T) <-chan T {
+/*
+A generator converts a function into a stream of values. repeatFn produces an
+unbounded stream, while take turns it into a finite stream for its consumer.
+
+take uses separate cancellation-aware receive and send steps. Writing
+"out <- <-in" inside a select is unsafe because the inner receive is evaluated
+before Go chooses a select case and can therefore hide cancellation.
+*/
+
+func repeatFn[T any](done <-chan struct{}, fn func() T) <-chan T {
 	stream := make(chan T)
 
 	go func() {
@@ -16,7 +24,15 @@ func repeatFun[T any, K any](done <-chan K, fn func() T) <-chan T {
 			select {
 			case <-done:
 				return
-			case stream <- fn():
+			default:
+			}
+
+			value := fn()
+
+			select {
+			case <-done:
+				return
+			case stream <- value:
 			}
 		}
 	}()
@@ -24,35 +40,64 @@ func repeatFun[T any, K any](done <-chan K, fn func() T) <-chan T {
 	return stream
 }
 
-func take[T any, K any](done <-chan K, stream <-chan T, n int) <-chan T {
+func take[T any](done <-chan struct{}, stream <-chan T, n int) <-chan T {
+	taken, _ := takeWithCompletion(done, stream, n)
+	return taken
+}
+
+// takeWithCompletion also exposes worker termination to lifecycle coordinators.
+func takeWithCompletion[T any](
+	done <-chan struct{},
+	stream <-chan T,
+	n int,
+) (<-chan T, <-chan struct{}) {
 	taken := make(chan T)
+	completed := make(chan struct{})
 
 	go func() {
+		defer close(completed)
 		defer close(taken)
 
-		for i := 0; i < n; i++ {
+		for range n {
+			var (
+				value T
+				open  bool
+			)
+
 			select {
 			case <-done:
 				return
-			case taken <- <-stream:
+			case value, open = <-stream:
+				if !open {
+					return
+				}
+			}
+
+			select {
+			case <-done:
+				return
+			case taken <- value:
 			}
 		}
 	}()
 
-	return taken
+	return taken, completed
 }
 
 func main() {
-	done := make(chan bool)
-	defer close(done)
+	done := make(chan struct{})
 
 	getRandomNum := func() int {
 		return rand.IntN(50000000)
 	}
 
-	randNumStream := repeatFun(done, getRandomNum)
+	randNumStream := repeatFn(done, getRandomNum)
 
 	for v := range take(done, randNumStream, 10) {
 		fmt.Println(v)
+	}
+
+	close(done)
+	for range randNumStream {
 	}
 }

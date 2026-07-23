@@ -1,56 +1,50 @@
 package main
 
-import (
-	"fmt"
-)
+import "fmt"
 
 /*
-	to prevent go routines from running infinitely (unintentionally)
+A closed done channel is a broadcast cancellation signal: every goroutine
+waiting to receive from it becomes ready. The empty struct communicates no
+payload and makes the intent explicit.
+
+The producer owns and closes its output channel. The caller owns and closes
+done, then waits for the output to close so main cannot exit while cleanup is
+still in progress.
 */
 
-func fibonacci(c chan int, done <-chan bool) {
-	defer close(c)
-	x, y := 0, 1
+func fibonacci(done <-chan struct{}) <-chan int {
+	numbers := make(chan int)
 
-	for {
-		select {
-		case c <- x:
-			x, y = y, x+y
-		case <-done:
-			fmt.Println("quit")
-			return
-		}
-	}
-}
+	go func() {
+		defer close(numbers)
 
-func someFun(done <-chan bool) {
-	for {
-		select {
-		case <-done:
-			return
-		default:
-			fmt.Println("DOING WORK!!")
+		x, y := 0, 1
+		for {
+			select {
+			case <-done:
+				return
+			case numbers <- x:
+				x, y = y, x+y
+			}
 		}
-	}
+	}()
+
+	return numbers
 }
 
 func main() {
-	/*
-		done := make(chan bool)
-		go someFun(done)
-
-		time.Sleep(5 * time.Second)
-		close(done)
-	*/
-
-	c := make(chan int)
-	done := make(chan bool)
-	go fibonacci(c, done)
+	done := make(chan struct{})
+	numbers := fibonacci(done)
 
 	for range 10 {
-		fmt.Println(<-c)
+		fmt.Println(<-numbers)
 	}
+
 	close(done)
 
-	fmt.Println("FINISH!!!")
+	// Ranging until close is also an explicit wait for producer shutdown.
+	for range numbers {
+	}
+
+	fmt.Println("FINISH!")
 }

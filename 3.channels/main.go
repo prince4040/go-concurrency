@@ -1,25 +1,31 @@
 package main
 
 /*
-	channels are the way for communication between multiple routines
+A channel communicates typed values between goroutines and also synchronizes
+the matching send and receive. On an unbuffered channel, the sender waits until
+a receiver is ready.
+
+The goroutine that produces values owns the responsibility for closing its
+outbound channel. A receive returns ok=false only after the channel is closed
+and all previously sent values have been received.
 */
 
 import "fmt"
 
-func someFunc(_ int, c chan string) {
-	c <- "data"
-
-	// close(c)
+func send(out chan<- string) {
+	defer close(out)
+	out <- "data"
 }
 
 func main() {
 	c := make(chan string)
 
-	go someFunc(1, c)
+	go send(c)
 
-	/* Blocking: blocks the main routine until channel closes or gets any data from channel */
-	result, ok := <-c
+	result, open := <-c
+	fmt.Println(result, open)
 
-	fmt.Println(result, ok)
+	_, open = <-c
+	fmt.Println("channel open:", open)
 	fmt.Println("FINISH!")
 }

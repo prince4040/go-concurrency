@@ -3,77 +3,71 @@ package balance
 import "fmt"
 
 /*
-var (
-	balance = 1000
-	mu      sync.Mutex
-)
-
-// approach 1
-func withdraw(wg *sync.WaitGroup, amount int) {
-	defer wg.Done()
-	// if amount > balance {
-	// 	return
-	// }
-
-	mu.Lock()
-	balance -= amount
-	mu.Unlock()
-}
+The account goroutine owns balance for its entire lifetime. Requests arrive on
+one channel, so withdrawals, deposits, and reads are processed serially without
+a mutex. A reply channel lets a balance query synchronize with all requests
+that were sent before it.
 */
 
-//****************************************
-
-type RequestType int
+type requestType int
 
 const (
-	WITHDRAW RequestType = iota
-	DEPOSITE
-	BALANCE
+	withdraw requestType = iota
+	deposit
+	getBalance
 )
 
-type AccountReq struct {
-	reqType RequestType
-	amount  int
-	c       chan int
+type accountRequest struct {
+	kind   requestType
+	amount int
+	reply  chan<- int
 }
 
-func account(req <-chan AccountReq) {
+func newBalanceQuery() (accountRequest, <-chan int) {
+	reply := make(chan int, 1)
+	return accountRequest{kind: getBalance, reply: reply}, reply
+}
+
+func account(requests <-chan accountRequest, stopped chan<- struct{}) {
+	defer close(stopped)
+
 	balance := 1000
 
-	for msg := range req {
-		switch msg.reqType {
-		case WITHDRAW:
-			balance -= msg.amount
-		case DEPOSITE:
-			balance += msg.amount
-		case BALANCE:
-			msg.c <- balance
+	for request := range requests {
+		switch request.kind {
+		case withdraw:
+			balance -= request.amount
+		case deposit:
+			balance += request.amount
+		case getBalance:
+			request.reply <- balance
+		default:
+			panic("unknown account request")
 		}
 	}
 }
 
 func BalanceMain() {
-	accChannel := make(chan AccountReq)
-	defer close(accChannel)
+	requests := make(chan accountRequest)
+	stopped := make(chan struct{})
 
-	go account(accChannel)
+	go account(requests, stopped)
 
-	accChannel <- AccountReq{
-		reqType: WITHDRAW,
-		amount:  300,
+	requests <- accountRequest{
+		kind:   withdraw,
+		amount: 300,
 	}
 
-	accChannel <- AccountReq{
-		reqType: DEPOSITE,
-		amount:  50,
+	requests <- accountRequest{
+		kind:   deposit,
+		amount: 50,
 	}
 
-	balanceChannel := make(chan int)
+	query, reply := newBalanceQuery()
+	requests <- query
 
-	accChannel <- AccountReq{
-		reqType: BALANCE,
-		c:       balanceChannel,
-	}
+	fmt.Println("Balance:", <-reply)
 
-	fmt.Println("Balance: ", <-balanceChannel)
+	close(requests)
+	<-stopped
 }

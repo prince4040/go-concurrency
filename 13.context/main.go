@@ -7,56 +7,40 @@ import (
 	"time"
 )
 
-func producer(ctx context.Context, msg string, c chan<- string) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case c <- msg:
-		}
+/*
+Context carries cancellation and deadlines through a call tree. Canceling a
+parent cancels every derived child; canceling a child does not cancel its
+parent or siblings.
+
+The apple producer has a shorter child deadline, while the orange producer
+lives until the parent deadline. Each producer owns and closes its output, so
+consumers can use range and WaitGroup.Wait can observe clean completion.
+*/
+
+func producer(ctx context.Context, message string, interval time.Duration) <-chan string {
+	if interval <= 0 {
+		panic("producer interval must be positive")
 	}
-}
 
-func main() {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	appleChannel := make(chan string)
-	orangeChannel := make(chan string)
-
-	go producer(ctx, "apple", appleChannel)
-	go producer(ctx, "orange", orangeChannel)
-
-	wg := sync.WaitGroup{}
-
-	wg.Add(1)
-	go func1(ctx, &wg, appleChannel)
-
-	wg.Add(1)
-	go func2(ctx, &wg, orangeChannel)
-
-	wg.Wait()
-}
-
-func orDone[T any](ctx context.Context, c <-chan T) <-chan T {
-	out := make(chan T)
+	out := make(chan string)
 
 	go func() {
 		defer close(out)
+
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
 
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case v, ok := <-c:
-				if !ok {
-					return
-				}
-				select {
-				case <-ctx.Done():
-					return
-				case out <- v:
-				}
+			case <-ticker.C:
+			}
+
+			select {
+			case <-ctx.Done():
+				return
+			case out <- message:
 			}
 		}
 	}()
@@ -64,33 +48,34 @@ func orDone[T any](ctx context.Context, c <-chan T) <-chan T {
 	return out
 }
 
-func func1(ctx context.Context, parentWg *sync.WaitGroup, c <-chan string) {
-	defer parentWg.Done()
-
-	doWork := func(ctx context.Context, wg *sync.WaitGroup) {
-		defer wg.Done()
-
-		for v := range orDone(ctx, c) {
-			fmt.Println(v)
-		}
+func consume(name string, values <-chan string) {
+	for value := range values {
+		fmt.Printf("%s received %s\n", name, value)
 	}
-
-	wg := sync.WaitGroup{}
-	newCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-
-	for range 3 {
-		wg.Add(1)
-		go doWork(newCtx, &wg)
-	}
-
-	wg.Wait()
 }
 
-func func2(ctx context.Context, parentWg *sync.WaitGroup, c <-chan string) {
-	defer parentWg.Done()
+func runExample(parentDuration, childDuration, producerInterval time.Duration) {
+	parent, cancelParent := context.WithTimeout(context.Background(), parentDuration)
+	defer cancelParent()
 
-	for v := range orDone(ctx, c) {
-		fmt.Println(v)
-	}
+	child, cancelChild := context.WithTimeout(parent, childDuration)
+	defer cancelChild()
+
+	apples := producer(child, "apple", producerInterval)
+	oranges := producer(parent, "orange", producerInterval)
+
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		consume("child", apples)
+	})
+	wg.Go(func() {
+		consume("parent", oranges)
+	})
+
+	wg.Wait()
+	fmt.Println("parent stopped:", parent.Err())
+}
+
+func main() {
+	runExample(400*time.Millisecond, 200*time.Millisecond, 50*time.Millisecond)
 }

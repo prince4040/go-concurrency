@@ -2,43 +2,75 @@ package main
 
 import "fmt"
 
-func sliceToChannel(nums []int) <-chan int {
+/*
+A pipeline is a series of stages connected by channels. Each stage receives
+values, transforms them, and owns the channel it returns. Closing an outbound
+channel tells the next stage that no more values will arrive.
+
+Every blocking receive and send also observes done. That lets cancellation
+propagate upstream when a downstream consumer stops before draining the
+pipeline.
+*/
+
+func sliceToChannel(done <-chan struct{}, nums []int) <-chan int {
 	out := make(chan int)
 
 	go func() {
-		for num := range nums {
-			out <- num
+		defer close(out)
+
+		for _, num := range nums {
+			select {
+			case <-done:
+				return
+			case out <- num:
+			}
 		}
-		close(out)
 	}()
 
 	return out
 }
 
-func sq(in <-chan int) <-chan int {
+func sq(done <-chan struct{}, in <-chan int) <-chan int {
 	out := make(chan int)
 
 	go func() {
-		for num := range in {
-			out <- num * num
-		}
+		defer close(out)
 
-		close(out)
+		for {
+			var (
+				num  int
+				open bool
+			)
+
+			select {
+			case <-done:
+				return
+			case num, open = <-in:
+				if !open {
+					return
+				}
+			}
+
+			select {
+			case <-done:
+				return
+			case out <- num * num:
+			}
+		}
 	}()
 
 	return out
 }
 
 func main() {
+	done := make(chan struct{})
+	defer close(done)
+
 	nums := []int{1, 2, 3, 4, 5, 6}
 
-	// stage 1
-	dataChannel := sliceToChannel(nums)
+	dataChannel := sliceToChannel(done, nums)
+	finalChannel := sq(done, dataChannel)
 
-	// stage 2
-	finalChannel := sq(dataChannel)
-
-	// stage 3
 	for num := range finalChannel {
 		fmt.Println(num)
 	}
